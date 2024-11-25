@@ -9,7 +9,7 @@ on:
       aws-region:
         required: true
         type: string
-		
+
 jobs:
   deploy:
     runs-on: windows-latest
