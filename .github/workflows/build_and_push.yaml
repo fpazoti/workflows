@@ -57,12 +57,38 @@ jobs:
           aws s3 sync "s3://%BUCKET%/backup" "s3://%BUCKET%/backup-previous" || ver > nul
           aws s3 sync "s3://%BUCKET%" "s3://%BUCKET%/backup" || ver > nul
 
-    - name: Cleanup old backups
-      if: success()
-      shell: cmd
-      run: |
-        set "BUCKET=${{ inputs.aws-bucket }}"
-        :: Trim whitespace from BUCKET variable
-        set "BUCKET=%BUCKET: =%"
-        aws s3 rm "s3://%BUCKET%/backup" --recursive
-        aws s3 rm "s3://%BUCKET%/backup-previous" --recursive
+          :: Create directories and copy files
+          mkdir deploy_files
+
+          for %%f in (dist\*.exe) do (
+            set "EXE_NAME=%%~nf"
+            mkdir "deploy_files\%%~nf"
+            copy "dist\%%~nxf" "deploy_files\%%~nf\"
+            mkdir "deploy_files\%%~nf\config"
+            xcopy /E /I /Y "src\config\*" "deploy_files\%%~nf\config\"
+            echo Deleting .py files
+            del /F /Q /A deploy_files\%%~nf\config\*.py 2>nul
+            if %errorlevel% neq 0 echo Failed to delete .py files
+            echo Deleting .pyc files
+            del /F /Q /A deploy_files\%%~nf\config\*.pyc 2>nul
+            if %errorlevel% neq 0 echo Failed to delete .pyc files
+            for /D %%d in ("deploy_files\%%~nf\config\__pycache__") do rmdir /S /Q "%%d"
+          )
+
+          :: Deploy and handle errors
+          aws s3 sync "deploy_files" "s3://%BUCKET%" --delete && (
+              echo Deploy successful!
+          ) || (
+              echo Deploy failed, rolling back...
+              aws s3 sync "s3://%BUCKET%/backup" "s3://%BUCKET%" --delete
+              exit /b 1
+          )
+      - name: Cleanup old backups
+        if: success()
+        shell: cmd
+        run: |
+          set "BUCKET=${{ inputs.aws-bucket }}"
+          :: Trim whitespace from BUCKET variable
+          set "BUCKET=%BUCKET: =%"
+          aws s3 rm "s3://%BUCKET%/backup" --recursive
+          aws s3 rm "s3://%BUCKET%/backup-previous" --recursive
