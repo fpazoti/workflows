@@ -12,83 +12,86 @@ on:
 jobs:
   deploy:
     runs-on: windows-latest
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Setup Python
-        run: >
-          # Download e instalar Python
-          curl -o python-3.10.6-amd64.exe https://www.python.org/ftp/python/3.10.6/python-3.10.6-amd64.exe
-          start /wait python-3.10.6-amd64.exe /quiet InstallAllUsers=1 PrependPath=1
-          # Criar ambiente virtual
-          python -m venv venv
-          call venv\Scripts\activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-        shell: cmd
-      - name: Build executable
-        run: |
-          call venv\Scripts\activate
-          pyinstaller --clean ./build.spec
-          dir dist
-          if not exist "dist\*.exe" (
-            echo Error: No .exe file was generated in dist directory
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      run: |
+        # Download e install Python
+        curl -o python-3.10.6-amd64.exe https://www.python.org/ftp/python/3.10.6/python-3.10.6-amd64.exe
+        start /wait python-3.10.6-amd64.exe /quiet InstallAllUsers=1 PrependPath=1
+        # Criar ambiente virtual
+        python -m venv venv
+        call venv\Scripts\activate
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+      shell: cmd
+
+    - name: Build executable
+      run: |
+        call venv\Scripts\activate
+        pyinstaller --clean ./build.spec
+        dir dist
+        if not exist "dist\*.exe" (
+          echo Error: No .exe file was generated in dist directory
+          exit /b 1
+        )
+        deactivate
+        rmdir /s /q venv
+      shell: cmd
+
+    - name: Set AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.TOO_AWS_STG_S3_RPA_KEY }}
+        aws-secret-access-key: ${{ secrets.TOO_AWS_STG_S3_RPA_ACCESS_KEY }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Deploy to S3
+      shell: cmd
+      run: |
+        set "BUCKET=${{ inputs.aws-bucket }}"
+        :: Trim whitespace from BUCKET variable
+        set "BUCKET=%BUCKET: =%"
+        :: Create backup of current state
+        aws s3 sync "s3://%BUCKET%/backup" "s3://%BUCKET%/backup-previous" || ver > nul
+        aws s3 sync "s3://%BUCKET%" "s3://%BUCKET%/backup" || ver > nul
+        
+        :: Create directories and copy files
+        mkdir deploy_files
+        for %%f in (dist\*.exe) do (
+          set "EXE_NAME=%%~nf"
+          mkdir "deploy_files\%%~nf"
+          copy "dist\%%~nxf" "deploy_files\%%~nf\"
+          mkdir "deploy_files\%%~nf\config"
+          xcopy /E /I /Y "src\config\*" "deploy_files\%%~nf\config\"
+          echo Deleting .py files
+          del /F /Q /A deploy_files\%%~nf\config\*.py 2>nul
+          if %errorlevel% neq 0 echo Failed to delete .py files
+          echo Deleting .pyc files
+          del /F /Q /A deploy_files\%%~nf\config\*.pyc 2>nul
+          if %errorlevel% neq 0 echo Failed to delete .pyc files
+          for /D %%d in ("deploy_files\%%~nf\config\__pycache__") do rmdir /S /Q "%%d"
+        )
+        
+        :: Deploy and handle errors
+        aws s3 sync "deploy_files" "s3://%BUCKET%" --delete && (
+            echo Deploy successful!
+        ) || (
+            echo Deploy failed, rolling back...
+            aws s3 sync "s3://%BUCKET%/backup" "s3://%BUCKET%" --delete
             exit /b 1
-          )
-          deactivate
-        shell: cmd
-      - name: Clean up venv
-        run: rmdir /s /q venv
-        shell: cmd
-      - name: Set AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.TOO_AWS_STG_RPA_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TOO_AWS_STG_RPA_SECRET_ACCESS_KEY }}
-          aws-region: ${{ inputs.aws-region }}
-      - name: Deploy to S3
-        shell: cmd
-        run: >
-          set "BUCKET=${{ inputs.aws-bucket }}"
-          :: Trim whitespace from BUCKET variable
-          set "BUCKET=%BUCKET: =%"
-          :: Create backup of current state
-          aws s3 sync "s3://%BUCKET%/backup" "s3://%BUCKET%/backup-previous" || ver > nul
-          aws s3 sync "s3://%BUCKET%" "s3://%BUCKET%/backup" || ver > nul
+        )
 
-          :: Create directories and copy files
-          mkdir deploy_files
-
-          for %%f in (dist\*.exe) do (
-            set "EXE_NAME=%%~nf"
-            mkdir "deploy_files\%%~nf"
-            copy "dist\%%~nxf" "deploy_files\%%~nf\"
-            mkdir "deploy_files\%%~nf\config"
-            xcopy /E /I /Y "src\config\*" "deploy_files\%%~nf\config\"
-            echo Deleting .py files
-            del /F /Q /A deploy_files\%%~nf\config\*.py 2>nul
-            if %errorlevel% neq 0 echo Failed to delete .py files
-            echo Deleting .pyc files
-            del /F /Q /A deploy_files\%%~nf\config\*.pyc 2>nul
-            if %errorlevel% neq 0 echo Failed to delete .pyc files
-            for /D %%d in ("deploy_files\%%~nf\config\__pycache__") do rmdir /S /Q "%%d"
-          )
-
-          :: Deploy and handle errors
-          aws s3 sync "deploy_files" "s3://%BUCKET%" --delete && (
-              echo Deploy successful!
-          ) || (
-              echo Deploy failed, rolling back...
-              aws s3 sync "s3://%BUCKET%/backup" "s3://%BUCKET%" --delete
-              exit /b 1
-          )
-      - name: Cleanup old backups
-        if: success()
-        shell: cmd
-        run: |
-          set "BUCKET=${{ inputs.aws-bucket }}"
-          :: Trim whitespace from BUCKET variable
-          set "BUCKET=%BUCKET: =%"
-          aws s3 rm "s3://%BUCKET%/backup" --recursive
-          aws s3 rm "s3://%BUCKET%/backup-previous" --recursive
+    - name: Cleanup old backups
+      if: success()
+      shell: cmd
+      run: |
+        set "BUCKET=${{ inputs.aws-bucket }}"
+        :: Trim whitespace from BUCKET variable
+        set "BUCKET=%BUCKET: =%"
+        aws s3 rm "s3://%BUCKET%/backup" --recursive
+        aws s3 rm "s3://%BUCKET%/backup-previous" --recursive
