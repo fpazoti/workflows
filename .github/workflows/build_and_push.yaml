@@ -43,8 +43,8 @@ jobs:
     - name: Set AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        aws-access-key-id: ${{ secrets.TOO_AWS_STG_S3_RPA_KEY }}
-        aws-secret-access-key: ${{ secrets.TOO_AWS_STG_S3_RPA_ACCESS_KEY }}
+        aws-access-key-id: ${{ secrets.TOO_AWS_STG_RPA_ACCESS_KEY }}
+        aws-secret-access-key: ${{ secrets.TOO_AWS_STG_RPA_SECRET_ACCESS_KEY }}
         aws-region: ${{ inputs.aws-region }}
 
     - name: Deploy to S3
