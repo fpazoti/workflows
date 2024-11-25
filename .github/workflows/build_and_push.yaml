@@ -19,10 +19,8 @@ jobs:
 
     - name: Setup Python
       run: |
-        # Download e install Python
         curl -o python-3.10.6-amd64.exe https://www.python.org/ftp/python/3.10.6/python-3.10.6-amd64.exe
         start /wait python-3.10.6-amd64.exe /quiet InstallAllUsers=1 PrependPath=1
-        # Criar ambiente virtual
         python -m venv venv
         call venv\Scripts\activate
         python -m pip install --upgrade pip
